@@ -1,0 +1,123 @@
+body {
+    margin: 0;
+    font-family: Arial, sans-serif;
+    background-color: #f5f6fa;
+}
+
+/* SIDEBAR */
+
+.sidebar {
+    position: fixed;
+    left: 0;
+    top: 0;
+    width: 250px;
+    height: 100vh;
+    background-color: #212529;
+    color: white;
+    padding-top: 20px;
+}
+
+.sidebar .logo {
+    text-align: center;
+    padding: 15px;
+    font-size: 20px;
+    font-weight: bold;
+    border-bottom: 1px solid #343a40;
+    margin-bottom: 15px;
+}
+
+.sidebar a {
+    display: block;
+    color: #ced4da;
+    text-decoration: none;
+    padding: 12px 20px;
+    transition: 0.2s;
+}
+
+.sidebar a:hover {
+    background-color: #343a40;
+    color: white;
+}
+
+.sidebar a.active {
+    background-color: #0d6efd;
+    color: white;
+}
+
+/* CONTENIDO */
+
+.main-content {
+    margin-left: 250px;
+    min-height: 100vh;
+}
+
+/* NAVBAR */
+
+.topbar {
+    height: 65px;
+    background-color: white;
+    border-bottom: 1px solid #dee2e6;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 25px;
+}
+
+.user-info {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+/* CONTENEDOR */
+
+.content {
+    padding: 30px;
+}
+
+/* TARJETAS */
+
+.stat-card {
+    background-color: white;
+    border-radius: 10px;
+    padding: 20px;
+    border: 1px solid #e9ecef;
+}
+
+.stat-card h6 {
+    color: #6c757d;
+    margin-bottom: 10px;
+}
+
+.stat-card h2 {
+    margin: 0;
+    font-weight: bold;
+}
+
+/* ACCESOS */
+
+.module-card {
+    background-color: white;
+    border: 1px solid #e9ecef;
+    border-radius: 10px;
+    padding: 20px;
+    text-decoration: none;
+    color: #212529;
+    display: block;
+    height: 100%;
+    transition: 0.2s;
+}
+
+.module-card:hover {
+    border-color: #0d6efd;
+    transform: translateY(-2px);
+}
+
+.module-card h5 {
+    margin-bottom: 8px;
+}
+
+.module-card p {
+    color: #6c757d;
+    margin-bottom: 0;
+}
