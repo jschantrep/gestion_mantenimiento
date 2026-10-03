@@ -54,7 +54,7 @@ $usuario = $_SESSION["usuario"];
         Mantenimientos
     </a>
 
-    <a href="../ordenes/index.php">
+    <a href="../controllers/OrdenController.php?accion=listar">
         Órdenes de mantenimiento
     </a>
 
