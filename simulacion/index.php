@@ -1,4 +1,5 @@
 <?php
+
 session_start();
 
 if (!isset($_SESSION["usuario"])) {
@@ -6,113 +7,430 @@ if (!isset($_SESSION["usuario"])) {
     exit;
 }
 
+require_once "../config/database.php";
+
 /*
 |--------------------------------------------------------------------------
-| Archivo CSV de resultados
+| URLs DE LAS APIs
 |--------------------------------------------------------------------------
 */
 
-$archivo = __DIR__ . "/../datos/simulacion/comparacion_final_simulacion.csv";
+$apiPrediccion = "https://geology-caption-aversion.ngrok-free.dev/api/prediccion";
 
+$apiSimulacion = "https://basis-herbal-bow-lately.trycloudflare.com/api/simulacion";
+
+/*
+|--------------------------------------------------------------------------
+| Variables
+|--------------------------------------------------------------------------
+*/
+
+$activos = [];
 $resultados = [];
 $error = null;
+$respuestaPrediccion = null;
 
 /*
 |--------------------------------------------------------------------------
-| Verificar archivo
+| CONSULTAR ACTIVOS ACTUALES EN MYSQL
 |--------------------------------------------------------------------------
 */
 
-if (!file_exists($archivo)) {
+$sql = "
+SELECT
+    a.id_activo,
+    a.codigo_activo,
+    a.nombre,
+    ta.nombre AS tipo_activo,
+    a.criticidad,
 
-    $error = "No se encontró el archivo CSV.";
+    COALESCE(
+        TIMESTAMPDIFF(YEAR, a.fecha_adquisicion, CURDATE()),
+        0
+    ) AS edad_activo_anios,
 
-} elseif (filesize($archivo) === 0) {
+    COALESCE(
+        a.horas_uso_acumuladas,
+        0
+    ) AS horas_uso_acumuladas,
 
-    $error = "El archivo CSV existe, pero está vacío.";
+    COALESCE(
+        i.horas_trabajo,
+        0
+    ) AS horas_trabajo,
+
+    COALESCE(
+        i.tiempo_parada_horas,
+        0
+    ) AS tiempo_parada_horas,
+
+    COALESCE(
+        r.costo_repuestos,
+        0
+    ) AS costo_repuestos
+
+FROM activo_tecnologico a
+
+INNER JOIN tipo_activo ta
+    ON ta.id_tipo_activo = a.id_tipo_activo
+
+LEFT JOIN (
+    SELECT
+        om.id_activo,
+
+        SUM(
+            COALESCE(
+                inv.horas_trabajo,
+                0
+            )
+        ) AS horas_trabajo,
+
+        SUM(
+            COALESCE(
+                inv.tiempo_parada_horas,
+                0
+            )
+        ) AS tiempo_parada_horas
+
+    FROM orden_mantenimiento om
+
+    INNER JOIN intervencion inv
+        ON inv.id_orden = om.id_orden
+
+    GROUP BY om.id_activo
+
+) i
+    ON i.id_activo = a.id_activo
+
+LEFT JOIN (
+    SELECT
+        om.id_activo,
+
+        SUM(
+            COALESCE(
+                ir.costo_total,
+                ir.cantidad * ir.costo_unitario,
+                0
+            )
+        ) AS costo_repuestos
+
+    FROM orden_mantenimiento om
+
+    INNER JOIN intervencion inv
+        ON inv.id_orden = om.id_orden
+
+    INNER JOIN intervencion_repuesto ir
+        ON ir.id_intervencion = inv.id_intervencion
+
+    GROUP BY om.id_activo
+
+) r
+    ON r.id_activo = a.id_activo
+
+ORDER BY a.id_activo
+";
+
+$consulta = $conn->query($sql);
+
+if (!$consulta) {
+
+    $error = "Error al consultar los activos: " . $conn->error;
 
 } else {
 
-    $handle = fopen($archivo, "r");
+    while ($fila = $consulta->fetch_assoc()) {
 
-    if ($handle === false) {
-
-        $error = "No fue posible abrir el archivo CSV.";
-
-    } else {
-
-        /*
-        | Detectar automáticamente si usa coma o punto y coma
-        */
-        $primeraLinea = fgets($handle);
-
-        rewind($handle);
-
-        if (strpos($primeraLinea, ";") !== false) {
-            $separador = ";";
-        } else {
-            $separador = ",";
-        }
-
-        /*
-        | Leer encabezados
-        */
-        $encabezados = fgetcsv($handle, 0, $separador);
-
-        if ($encabezados !== false) {
-
-            // Eliminar BOM UTF-8 si existe
-            $encabezados[0] = preg_replace(
-                '/^\xEF\xBB\xBF/',
-                '',
-                $encabezados[0]
-            );
-
-            while (($fila = fgetcsv($handle, 0, $separador)) !== false) {
-
-                if (count($fila) === count($encabezados)) {
-
-                    $registro = array_combine(
-                        $encabezados,
-                        $fila
-                    );
-
-                    if ($registro !== false) {
-                        $resultados[] = $registro;
-                    }
-                }
-            }
-        }
-
-        fclose($handle);
+        $activos[] = $fila;
     }
 }
 
-
 /*
 |--------------------------------------------------------------------------
-| Buscar estrategias
+| EJECUTAR PREDICCIÓN
+|--------------------------------------------------------------------------
+|
+| Primero obtenemos la predicción de cada activo.
+| Esa predicción será utilizada posteriormente
+| por la estrategia "Inteligente".
 |--------------------------------------------------------------------------
 */
 
-$datos = [
-    "Reactivo" => null,
-    "Preventivo" => null,
-    "Inteligente" => null
-];
+if (!$error && count($activos) > 0) {
 
+    $activos_api = [];
 
-foreach ($resultados as $resultado) {
+    foreach ($activos as $activo) {
 
-    if (!isset($resultado["estrategia"])) {
-        continue;
+        $activos_api[] = [
+            "id_activo" => (int)$activo["id_activo"],
+
+            "edad_activo_anios" =>
+                (float)$activo["edad_activo_anios"],
+
+            "horas_uso_acumuladas" =>
+                (float)$activo["horas_uso_acumuladas"],
+
+            "horas_trabajo" =>
+                (float)$activo["horas_trabajo"],
+
+            "tiempo_parada_horas" =>
+                (float)$activo["tiempo_parada_horas"],
+
+            "costo_repuestos" =>
+                (float)$activo["costo_repuestos"],
+
+            "tipo_activo" =>
+                $activo["tipo_activo"],
+
+            "criticidad" =>
+                $activo["criticidad"]
+        ];
     }
 
-    $estrategia = trim($resultado["estrategia"]);
+    $datosPrediccion = json_encode([
+        "activos" => $activos_api
+    ]);
 
-    if (isset($datos[$estrategia])) {
+    /*
+    |--------------------------------------------------------------------------
+    | CURL - PREDICCIÓN
+    |--------------------------------------------------------------------------
+    */
 
-        $datos[$estrategia] = $resultado;
+    $ch = curl_init($apiPrediccion);
+
+    curl_setopt_array($ch, [
+
+        CURLOPT_RETURNTRANSFER => true,
+
+        CURLOPT_POST => true,
+
+        CURLOPT_POSTFIELDS => $datosPrediccion,
+
+        CURLOPT_HTTPHEADER => [
+            "Content-Type: application/json",
+            "Content-Length: " . strlen($datosPrediccion)
+        ],
+
+        CURLOPT_TIMEOUT => 120,
+
+        CURLOPT_CONNECTTIMEOUT => 15
+
+    ]);
+
+    $respuestaPrediccionRaw = curl_exec($ch);
+
+    $errorCurl = curl_error($ch);
+
+    $httpPrediccion = curl_getinfo(
+        $ch,
+        CURLINFO_HTTP_CODE
+    );
+
+    curl_close($ch);
+
+    /*
+    |--------------------------------------------------------------------------
+    | VALIDAR PREDICCIÓN
+    |--------------------------------------------------------------------------
+    */
+
+    if ($respuestaPrediccionRaw === false || $errorCurl) {
+
+        $error =
+            "No fue posible comunicarse con la API de predicción. "
+            . $errorCurl;
+
+    } elseif ($httpPrediccion !== 200) {
+
+        $error =
+            "La API de predicción respondió con HTTP "
+            . $httpPrediccion;
+
+    } else {
+
+        $respuestaPrediccion =
+            json_decode(
+                $respuestaPrediccionRaw,
+                true
+            );
+
+        if (
+            !is_array($respuestaPrediccion) ||
+            !isset($respuestaPrediccion["resultados"])
+        ) {
+
+            $error =
+                "La API de predicción devolvió una respuesta inválida.";
+        }
+    }
+}
+
+/*
+|--------------------------------------------------------------------------
+| AGREGAR PREDICCIÓN A CADA ACTIVO
+|--------------------------------------------------------------------------
+*/
+
+if (!$error && $respuestaPrediccion) {
+
+    $predicciones = [];
+
+    foreach (
+        $respuestaPrediccion["resultados"]
+        as $resultado
+    ) {
+
+        $id = (int)$resultado["id_activo"];
+
+        $predicciones[$id] =
+            (int)$resultado["prediccion"];
+    }
+
+    foreach ($activos as &$activo) {
+
+        $id = (int)$activo["id_activo"];
+
+        $activo["prediccion"] =
+            $predicciones[$id] ?? 0;
+    }
+
+    unset($activo);
+}
+
+/*
+|--------------------------------------------------------------------------
+| EJECUTAR SIMULACIÓN MONTE CARLO
+|--------------------------------------------------------------------------
+*/
+
+if (!$error && count($activos) > 0) {
+
+    $activos_simulacion = [];
+
+    foreach ($activos as $activo) {
+
+        $activos_simulacion[] = [
+
+            "id_activo" =>
+                (int)$activo["id_activo"],
+
+            "edad_activo_anios" =>
+                (float)$activo["edad_activo_anios"],
+
+            "horas_uso_acumuladas" =>
+                (float)$activo["horas_uso_acumuladas"],
+
+            "horas_trabajo" =>
+                (float)$activo["horas_trabajo"],
+
+            "tiempo_parada_horas" =>
+                (float)$activo["tiempo_parada_horas"],
+
+            "costo_repuestos" =>
+                (float)$activo["costo_repuestos"],
+
+            "tipo_activo" =>
+                $activo["tipo_activo"],
+
+            "criticidad" =>
+                $activo["criticidad"],
+
+            "prediccion" =>
+                (int)$activo["prediccion"]
+        ];
+    }
+
+    $datosSimulacion = json_encode([
+
+        "dias_simulacion" => 365,
+
+        "iteraciones" => 1000,
+
+        "activos" => $activos_simulacion
+
+    ]);
+
+    /*
+    |--------------------------------------------------------------------------
+    | CURL - SIMULACIÓN
+    |--------------------------------------------------------------------------
+    */
+
+    $ch = curl_init($apiSimulacion);
+
+    curl_setopt_array($ch, [
+
+        CURLOPT_RETURNTRANSFER => true,
+
+        CURLOPT_POST => true,
+
+        CURLOPT_POSTFIELDS => $datosSimulacion,
+
+        CURLOPT_HTTPHEADER => [
+            "Content-Type: application/json",
+            "Content-Length: " . strlen($datosSimulacion)
+        ],
+
+        CURLOPT_TIMEOUT => 180,
+
+        CURLOPT_CONNECTTIMEOUT => 15
+
+    ]);
+
+    $respuestaSimulacionRaw = curl_exec($ch);
+
+    $errorCurl = curl_error($ch);
+
+    $httpSimulacion = curl_getinfo(
+        $ch,
+        CURLINFO_HTTP_CODE
+    );
+
+    curl_close($ch);
+
+    /*
+    |--------------------------------------------------------------------------
+    | VALIDAR SIMULACIÓN
+    |--------------------------------------------------------------------------
+    */
+
+    if (
+        $respuestaSimulacionRaw === false ||
+        $errorCurl
+    ) {
+
+        $error =
+            "No fue posible comunicarse con la API de simulación. "
+            . $errorCurl;
+
+    } elseif ($httpSimulacion !== 200) {
+
+        $error =
+            "La API de simulación respondió con HTTP "
+            . $httpSimulacion;
+
+    } else {
+
+        $respuestaSimulacion =
+            json_decode(
+                $respuestaSimulacionRaw,
+                true
+            );
+
+        if (
+            !is_array($respuestaSimulacion) ||
+            !isset($respuestaSimulacion["escenarios"])
+        ) {
+
+            $error =
+                "La API de simulación devolvió una respuesta inválida.";
+
+        } else {
+
+            $resultados =
+                $respuestaSimulacion["escenarios"];
+        }
     }
 }
 
@@ -125,7 +443,10 @@ foreach ($resultados as $resultado) {
 
     <meta charset="UTF-8">
 
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0"
+    >
 
     <title>Simulación de Mantenimiento</title>
 
@@ -139,52 +460,78 @@ foreach ($resultados as $resultado) {
 <body>
 
 <div class="container-fluid py-4">
+
     <?php if ($error): ?>
 
-    <div class="alert alert-danger">
-        <strong>Error:</strong>
-        <?= htmlspecialchars($error) ?>
+        <div class="alert alert-danger">
 
-        <hr>
+            <strong>Error:</strong>
 
-        <small>
-            Ruta buscada:
-            <?= htmlspecialchars($archivo) ?>
-        </small>
-    </div>
+            <?= htmlspecialchars($error) ?>
 
-<?php endif; ?>
+        </div>
+
+    <?php endif; ?>
+
 
     <div class="d-flex justify-content-between align-items-center mb-4">
 
         <div>
-            <h2 class="mb-1">Simulación de Mantenimiento</h2>
+
+            <h2 class="mb-1">
+                Simulación de Mantenimiento
+            </h2>
 
             <p class="text-muted mb-0">
-                Comparación de estrategias de mantenimiento mediante simulación.
+
+                Comparación de estrategias mediante
+                simulación Monte Carlo.
+
             </p>
+
         </div>
 
     </div>
 
 
-    <?php if (empty($resultados)): ?>
+    <?php if (!$error && !empty($resultados)): ?>
 
-        <div class="alert alert-warning">
 
-            No se encontraron resultados de la simulación.
+        <!-- ========================================================= -->
+        <!-- INFORMACIÓN DE LA SIMULACIÓN -->
+        <!-- ========================================================= -->
 
-            <br>
+        <div class="alert alert-info">
 
-            Verifica que exista el archivo:
+            <div class="row">
 
-            <strong>
-                datos/simulacion/comparacion_final_simulacion.csv
-            </strong>
+                <div class="col-md-4">
+
+                    <strong>Activos analizados:</strong>
+
+                    <?= count($activos) ?>
+
+                </div>
+
+                <div class="col-md-4">
+
+                    <strong>Periodo:</strong>
+
+                    365 días
+
+                </div>
+
+                <div class="col-md-4">
+
+                    <strong>Iteraciones:</strong>
+
+                    1.000 simulaciones
+
+                </div>
+
+            </div>
 
         </div>
-
-    <?php else: ?>
 
 
         <!-- ========================================================= -->
@@ -193,64 +540,137 @@ foreach ($resultados as $resultado) {
 
         <div class="row g-4 mb-4">
 
-            <?php foreach ($datos as $estrategia => $resultado): ?>
+            <?php foreach ($resultados as $resultado): ?>
 
-                <?php if ($resultado): ?>
+                <div class="col-md-4">
 
-                    <div class="col-md-4">
+                    <div class="card shadow-sm h-100">
 
-                        <div class="card shadow-sm h-100">
+                        <div class="card-body">
 
-                            <div class="card-body">
+                            <h5 class="card-title">
 
-                                <h5 class="card-title">
-                                    <?= htmlspecialchars($estrategia) ?>
-                                </h5>
+                                <?= htmlspecialchars(
+                                    $resultado["estrategia"]
+                                ) ?>
 
-                                <hr>
+                            </h5>
 
-                                <p class="mb-2">
-                                    <strong>Fallas:</strong>
-                                    <?= number_format(
-                                        (float)$resultado["fallas_totales"],
-                                        0,
-                                        ",",
-                                        "."
-                                    ) ?>
-                                </p>
+                            <hr>
 
-                                <p class="mb-2">
-                                    <strong>Horas de parada:</strong>
-                                    <?= number_format(
-                                        (float)$resultado["horas_parada_totales"],
-                                        2,
-                                        ",",
-                                        "."
-                                    ) ?>
-                                </p>
+                            <p class="mb-2">
 
-                                <p class="mb-0">
-                                    <strong>Costo total:</strong>
-                                    $
-                                    <?= number_format(
-                                        (float)$resultado["costo_total"],
-                                        0,
-                                        ",",
-                                        "."
-                                    ) ?>
-                                </p>
+                                <strong>
+                                    Fallas promedio:
+                                </strong>
 
-                            </div>
+                                <?= number_format(
+                                    (float)$resultado["fallas_promedio"],
+                                    2,
+                                    ",",
+                                    "."
+                                ) ?>
+
+                            </p>
+
+
+                            <p class="mb-2">
+
+                                <strong>
+                                    Horas de parada promedio:
+                                </strong>
+
+                                <?= number_format(
+                                    (float)$resultado["horas_parada_promedio"],
+                                    2,
+                                    ",",
+                                    "."
+                                ) ?>
+
+                            </p>
+
+
+                            <p class="mb-2">
+
+                                <strong>
+                                    Costo promedio:
+                                </strong>
+
+                                $
+
+                                <?= number_format(
+                                    (float)$resultado["costo_promedio"],
+                                    0,
+                                    ",",
+                                    "."
+                                ) ?>
+
+                            </p>
+
+
+                            <p class="mb-0">
+
+                                <strong>
+                                    Activos intervenidos:
+                                </strong>
+
+                                <?= number_format(
+                                    (float)$resultado["activos_intervenidos_promedio"],
+                                    2,
+                                    ",",
+                                    "."
+                                ) ?>
+
+                            </p>
 
                         </div>
 
                     </div>
 
-                <?php endif; ?>
+                </div>
 
             <?php endforeach; ?>
 
         </div>
+
+
+        <!-- ========================================================= -->
+        <!-- RECOMENDACIÓN -->
+        <!-- ========================================================= -->
+
+        <?php
+
+        $estrategiaRecomendada =
+            $respuestaSimulacion["estrategia_recomendada"] ?? null;
+
+        ?>
+
+        <?php if ($estrategiaRecomendada): ?>
+
+            <div class="alert alert-success shadow-sm">
+
+                <h5 class="mb-2">
+
+                    Estrategia recomendada:
+                    <strong>
+                        <?= htmlspecialchars(
+                            $estrategiaRecomendada
+                        ) ?>
+                    </strong>
+
+                </h5>
+
+                <p class="mb-0">
+
+                    Según las 1.000 iteraciones de Monte Carlo,
+                    esta estrategia presentó el menor costo
+                    promedio entre los escenarios simulados.
+
+                </p>
+
+            </div>
+
+        <?php endif; ?>
 
 
         <!-- ========================================================= -->
@@ -262,24 +682,40 @@ foreach ($resultados as $resultado) {
             <div class="card-body">
 
                 <h5 class="mb-3">
+
                     Comparación de estrategias
+
                 </h5>
 
                 <div class="table-responsive">
 
-                    <table class="table table-bordered table-hover align-middle">
+                    <table
+                        class="table table-bordered table-hover align-middle"
+                    >
 
                         <thead class="table-dark">
 
                             <tr>
 
-                                <th>Estrategia</th>
+                                <th>
+                                    Estrategia
+                                </th>
 
-                                <th>Fallas totales</th>
+                                <th>
+                                    Fallas promedio
+                                </th>
 
-                                <th>Horas de parada</th>
+                                <th>
+                                    Horas de parada
+                                </th>
 
-                                <th>Costo total</th>
+                                <th>
+                                    Costo promedio
+                                </th>
+
+                                <th>
+                                    Activos intervenidos
+                                </th>
 
                             </tr>
 
@@ -287,49 +723,69 @@ foreach ($resultados as $resultado) {
 
                         <tbody>
 
-                        <?php foreach ($datos as $estrategia => $resultado): ?>
+                        <?php foreach ($resultados as $resultado): ?>
 
-                            <?php if ($resultado): ?>
+                            <tr>
 
-                                <tr>
+                                <td>
 
-                                    <td>
-                                        <strong>
-                                            <?= htmlspecialchars($estrategia) ?>
-                                        </strong>
-                                    </td>
+                                    <strong>
 
-                                    <td>
-                                        <?= number_format(
-                                            (float)$resultado["fallas_totales"],
-                                            0,
-                                            ",",
-                                            "."
+                                        <?= htmlspecialchars(
+                                            $resultado["estrategia"]
                                         ) ?>
-                                    </td>
 
-                                    <td>
-                                        <?= number_format(
-                                            (float)$resultado["horas_parada_totales"],
-                                            2,
-                                            ",",
-                                            "."
-                                        ) ?>
-                                    </td>
+                                    </strong>
 
-                                    <td>
-                                        $
-                                        <?= number_format(
-                                            (float)$resultado["costo_total"],
-                                            0,
-                                            ",",
-                                            "."
-                                        ) ?>
-                                    </td>
+                                </td>
 
-                                </tr>
+                                <td>
 
-                            <?php endif; ?>
+                                    <?= number_format(
+                                        (float)$resultado["fallas_promedio"],
+                                        2,
+                                        ",",
+                                        "."
+                                    ) ?>
+
+                                </td>
+
+                                <td>
+
+                                    <?= number_format(
+                                        (float)$resultado["horas_parada_promedio"],
+                                        2,
+                                        ",",
+                                        "."
+                                    ) ?>
+
+                                </td>
+
+                                <td>
+
+                                    $
+
+                                    <?= number_format(
+                                        (float)$resultado["costo_promedio"],
+                                        0,
+                                        ",",
+                                        "."
+                                    ) ?>
+
+                                </td>
+
+                                <td>
+
+                                    <?= number_format(
+                                        (float)$resultado["activos_intervenidos_promedio"],
+                                        2,
+                                        ",",
+                                        "."
+                                    ) ?>
+
+                                </td>
+
+                            </tr>
 
                         <?php endforeach; ?>
 
@@ -357,20 +813,31 @@ foreach ($resultados as $resultado) {
                 </h5>
 
                 <p class="mb-2">
-                    La simulación permite comparar el comportamiento de
-                    diferentes estrategias de mantenimiento durante un
-                    periodo de 365 días.
+
+                    La simulación utiliza los datos actuales
+                    registrados en el sistema y ejecuta
+                    1.000 iteraciones Monte Carlo durante
+                    un periodo de 365 días.
+
                 </p>
 
                 <p class="mb-2">
-                    La estrategia reactiva presentó el mayor número de
-                    fallas y horas de parada dentro del escenario simulado.
+
+                    Se comparan tres estrategias:
+
+                    <strong>reactiva</strong>,
+                    <strong>preventiva</strong> e
+                    <strong>inteligente</strong>.
+
                 </p>
 
                 <p class="mb-0">
-                    La estrategia inteligente utiliza el modelo predictivo
-                    desarrollado en la etapa de minería de datos para
-                    generar alertas y realizar intervenciones preventivas.
+
+                    La estrategia inteligente utiliza las
+                    predicciones obtenidas mediante el modelo
+                    de minería de datos para determinar qué
+                    activos requieren intervención preventiva.
+
                 </p>
 
             </div>
@@ -378,7 +845,18 @@ foreach ($resultados as $resultado) {
         </div>
 
 
+    <?php elseif (!$error): ?>
+
+
+        <div class="alert alert-warning">
+
+            No se encontraron activos disponibles para
+            realizar la simulación.
+
+        </div>
+
     <?php endif; ?>
+
 
 </div>
 
