@@ -90,7 +90,7 @@ $total_intervenciones = $resultado_intervenciones->fetch_assoc()["total"];
         Órdenes de mantenimiento
     </a>
 
-    <a href="../intervenciones/index.php">
+    <a href="../controllers/IntervencionController.php?accion=listar">
         Intervenciones
     </a>
 
@@ -319,7 +319,7 @@ $total_intervenciones = $resultado_intervenciones->fetch_assoc()["total"];
 
             <div class="col-md-6 col-lg-4">
 
-                <a href="../intervenciones/index.php"
+                <a href="../controllers/IntervencionController.php?accion=listar"
                    class="module-card">
 
                     <h5>
@@ -338,7 +338,7 @@ $total_intervenciones = $resultado_intervenciones->fetch_assoc()["total"];
 
             <div class="col-md-6 col-lg-4">
 
-                <a href="../historial/index.php"
+                <a href="../controllers/HistorialController.php?accion=listar"
                    class="module-card">
 
                     <h5>
