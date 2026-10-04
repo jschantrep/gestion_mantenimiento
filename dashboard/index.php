@@ -94,19 +94,12 @@ $total_intervenciones = $resultado_intervenciones->fetch_assoc()["total"];
         Intervenciones
     </a>
 
-    <a href="../costos/index.php">
-        Costos
-    </a>
-
     <a href="../historial/index.php">
         Historial
     </a>
 
     <hr>
 
-    <a href="../analisis/indicadores.php">
-        Indicadores
-    </a>
 
     <a href="../analisis/clustering.php">
         Segmentación
